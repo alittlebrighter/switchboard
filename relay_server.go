@@ -10,28 +10,39 @@ import (
 	"golang.org/x/net/websocket"
 )
 
-var controllerConns map[string]chan []byte
+func main() {
+	serverCtx := NewServerContext()
 
-// HouseControllerConn manages websocket connections coming from the Raspberry Pis
-func HouseControllerConn(ws *websocket.Conn) {
-	log.Printf("Connection started from: %s\n", ws.Config().Origin.Host)
+	http.Handle("/listen", websocket.Handler(serverCtx.HouseControllerConn))
+	http.HandleFunc("/command", serverCtx.UserDeviceAPI)
 
-	connsKey := ws.Config().Origin.Host
-
-	controllerConns[connsKey] = make(chan []byte)
-
-	for {
-		msg := <-controllerConns[connsKey]
-		if string(msg) == "END" {
-			break
-		}
-
-		ws.Write(msg)
+	err := http.ListenAndServe(":12345", nil)
+	if err != nil {
+		panic("ListenAndServe: " + err.Error())
 	}
 }
 
+// HouseControllerConn manages websocket connections coming from the Raspberry Pis
+func (sCtx *ServerContext) HouseControllerConn(ws *websocket.Conn) {
+	connKey := ws.Config().Origin.Host
+	log.Printf("Connection started from: %s", connKey)
+
+	connChan := sCtx.AddControllerConn(connKey)
+	for {
+		msg := <-connChan
+		if string(msg) == "END" {
+			break
+		}
+		log.Printf("Sending %s to %s", msg, connKey)
+		ws.Write(msg)
+	}
+	sCtx.CloseControllerConn(connKey)
+	log.Printf("Closing connection to: %s", connKey)
+}
+
 // UserDeviceAPI receives requests from a user's mobile app and routes them to the correct Raspberry Pi websocket connection
-func UserDeviceAPI(w http.ResponseWriter, r *http.Request) {
+func (sCtx *ServerContext) UserDeviceAPI(w http.ResponseWriter, r *http.Request) {
+	// should be query parameter since we're sending the body of the request as the message
 	controllerID := r.FormValue("controller")
 
 	// reading the body of the request in this way prevents overflow attacks
@@ -41,22 +52,49 @@ func UserDeviceAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if conn, ok := controllerConns[controllerID]; ok {
-		conn <- msg
-		w.Write([]byte(fmt.Sprintf("Sent command to %s.", controllerID)))
-	} else {
-		w.Write([]byte(fmt.Sprintf("Controller %s not found.", controllerID)))
+	conn, err := sCtx.FetchControllerConn(controllerID)
+	if err != nil {
+		w.Write([]byte(err.Error()))
+		return
 	}
+
+	conn <- msg
+	w.Write([]byte(fmt.Sprintf("Sent command to %s.", controllerID)))
 }
 
-func main() {
-	controllerConns = make(map[string]chan []byte)
+// ConnectionNotFound is thrown when a controller connection cannot be found in the ServerContext
+type ConnectionNotFound struct{}
 
-	http.Handle("/listen", websocket.Handler(HouseControllerConn))
-	http.HandleFunc("/command", UserDeviceAPI)
+func (cErr *ConnectionNotFound) Error() string {
+	return "Connection not found"
+}
 
-	err := http.ListenAndServe(":12345", nil)
-	if err != nil {
-		panic("ListenAndServe: " + err.Error())
+// ServerContext maintains the map of controller IDs and their corresponding channels linked to the active websocket
+type ServerContext struct {
+	controllerConns map[string]chan []byte
+}
+
+// NewServerContext returns a pointer to a new instance
+func NewServerContext() *ServerContext {
+	return &ServerContext{controllerConns: make(map[string]chan []byte)}
+}
+
+// AddControllerConn adds or overwrites the channel linked to a controller websocket connection
+func (sCtx *ServerContext) AddControllerConn(connID string) chan []byte {
+	connChan := make(chan []byte)
+	sCtx.controllerConns[connID] = connChan
+	return connChan
+}
+
+// FetchControllerConn retrieves the channel linked to a controller websocket connection
+func (sCtx *ServerContext) FetchControllerConn(connID string) (chan []byte, error) {
+	if conn, ok := sCtx.controllerConns[connID]; ok {
+		return conn, nil
 	}
+	return nil, new(ConnectionNotFound)
+}
+
+// CloseControllerConn deletes the channel linked to a controller websocket connection
+func (sCtx *ServerContext) CloseControllerConn(connID string) {
+	delete(sCtx.controllerConns, connID)
 }
