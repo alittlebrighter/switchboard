@@ -13,8 +13,8 @@ import (
 func main() {
 	serverCtx := NewServerContext()
 
-	http.Handle("/listen", websocket.Handler(serverCtx.HouseControllerConn))
-	http.HandleFunc("/command", serverCtx.UserDeviceAPI)
+	http.Handle("/socket", websocket.Handler(serverCtx.HouseControllerConn))
+	http.HandleFunc("/messages", serverCtx.UserDeviceAPI)
 
 	err := http.ListenAndServe(":12345", nil)
 	if err != nil {
@@ -33,7 +33,7 @@ func (sCtx *ServerContext) HouseControllerConn(ws *websocket.Conn) {
 		if string(msg) == "END" {
 			break
 		}
-		log.Printf("Sending %s to %s", msg, connKey)
+
 		ws.Write(msg)
 	}
 	sCtx.CloseControllerConn(connKey)
@@ -43,7 +43,7 @@ func (sCtx *ServerContext) HouseControllerConn(ws *websocket.Conn) {
 // UserDeviceAPI receives requests from a user's mobile app and routes them to the correct Raspberry Pi websocket connection
 func (sCtx *ServerContext) UserDeviceAPI(w http.ResponseWriter, r *http.Request) {
 	// should be query parameter since we're sending the body of the request as the message
-	controllerID := r.FormValue("controller")
+	controllerID := r.FormValue("destination")
 
 	// reading the body of the request in this way prevents overflow attacks
 	msg, err := ioutil.ReadAll(io.LimitReader(r.Body, 1048576))
@@ -59,7 +59,7 @@ func (sCtx *ServerContext) UserDeviceAPI(w http.ResponseWriter, r *http.Request)
 	}
 
 	conn <- msg
-	w.Write([]byte(fmt.Sprintf("Sent command to %s.", controllerID)))
+	w.Write([]byte(fmt.Sprintf("Sent Message to %s.", controllerID)))
 }
 
 // ConnectionNotFound is thrown when a controller connection cannot be found in the ServerContext

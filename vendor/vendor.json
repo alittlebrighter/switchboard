@@ -1,0 +1,13 @@
+{
+	"comment": "",
+	"ignore": "test",
+	"package": [
+		{
+			"checksumSHA1": "xvuVB+aMh4udpinGsmtK31pcWC0=",
+			"path": "golang.org/x/net/websocket",
+			"revision": "cbbbe2bc0f2efdd2afb318d93f1eadb19350e4a3",
+			"revisionTime": "2016-02-13T01:55:36Z"
+		}
+	],
+	"rootPath": "github.com/gegillam/pi-webserver"
+}
