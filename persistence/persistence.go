@@ -4,7 +4,7 @@ import (
 	"errors"
 )
 
-type Mailbox [][]byte
+type Mailbox []string
 
 type MessageRepository interface {
 	SaveMessages(string, Mailbox) error
@@ -20,8 +20,8 @@ func NewMapRepository() MapRepository {
 }
 
 func (repo MapRepository) SaveMessages(address string, msgs Mailbox) error {
-	if _, ok := repo[address]; ok {
-		repo[address] = append(repo[address], msgs...)
+	if mailbox, ok := repo[address]; ok {
+		mailbox = append(mailbox, msgs...)
 	} else {
 		repo[address] = msgs
 	}
