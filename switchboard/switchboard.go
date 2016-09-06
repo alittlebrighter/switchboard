@@ -6,7 +6,7 @@ const channelBufferSize = 5
 // what to do with the message
 type Envelope struct {
     Destination string
-    TTL         int64
+    TTL         int
     Contents    string
 }
 
@@ -44,9 +44,14 @@ func (s *Switchboard) CloseControllerConn(connID string) {
 // DeliverEnvelope attempts to deliver the contents of an Envelope if the destination is connected
 // otherwise it returns true to indicate to the caller that the contents should be persisted
 func (s *Switchboard) DeliverEnvelope(envelope *Envelope) bool {
-    if conn := s.FetchControllerConn(envelope.Destination); conn != nil {
+    conn := s.FetchControllerConn(envelope.Destination)
+    switch {
+    case conn == nil && envelope.TTL == 0:
+        return false
+    case conn == nil:
+        return true
+    default:
         conn <- envelope.Contents
         return false
     }
-    return true
 }

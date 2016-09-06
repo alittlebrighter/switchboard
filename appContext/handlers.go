@@ -37,7 +37,6 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 				log.Println("Error parsing incoming message: " + err.Error())
 				continue
 			}
-
 			if sCtx.DeliverEnvelope(env) {
 				sCtx.SaveMessages(env.Destination, persistence.Mailbox{env.Contents})
 			}
@@ -46,7 +45,8 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
-	go func() { // read messages delivered to our address
+	go func() { 
+	// read and send messages delivered to our address
 		for msg := range connChan {
 			if _, err := ws.Write([]byte(msg)); err != nil {
 				sCtx.SaveMessages(connKey, persistence.Mailbox{msg})

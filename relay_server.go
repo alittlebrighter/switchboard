@@ -13,7 +13,7 @@ import (
 func main() {
 	host := flag.String("host", "localhost:12345", "The relay host to connect to.")
 	flag.Parse()
-
+	
 	serverCtx := appContext.NewServerContext(persistence.MapBackend)
 
 	http.Handle("/socket", websocket.Handler(serverCtx.WebsocketConn))
