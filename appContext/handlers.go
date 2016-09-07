@@ -2,6 +2,7 @@ package appContext
 
 import (
 	"log"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -27,7 +28,7 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 			var msg = make([]byte, 1024)
 			n, err := ws.Read(msg)
 			if err != nil {
-				log.Println("Error reading incoming message: " + err.Error())
+				ws.Close()
 				break
 			}
 
@@ -49,6 +50,7 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 	// read and send messages delivered to our address
 		for msg := range connChan {
 			if _, err := ws.Write([]byte(msg)); err != nil {
+				ws.Close()
 				sCtx.SaveMessages(connKey, persistence.Mailbox{msg})
 			}
 		}
