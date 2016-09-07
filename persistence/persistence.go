@@ -2,10 +2,22 @@ package persistence
 
 import (
 	"errors"
+	"time"
+
+	"github.com/alittlebrighter/switchboard/switchboard"
 )
 
+type Message struct {
+	Content string
+	expires time.Time
+}
+
+func NewMessage(env *switchboard.Envelope) *Message {
+	return &Message{Content: env.Contents, expires: time.Now().Add(env.TTL * time.Second)}
+}
+
 // Mailbox stores an array of encrypted and encoded messages
-type Mailbox []string
+type Mailbox []*Message
 
 var errMailboxNotFound = errors.New("No mailbox found at the address specified.")
 
@@ -47,10 +59,15 @@ func (repo MapRepository) SaveMessages(address string, msgs Mailbox) error {
 // GetMessages retrieves all of the messages stored in a mailbox at an address and removes the associated address' mailbox
 func (repo MapRepository) GetMessages(address string) (Mailbox, error) {
 	if box, ok := repo[address]; ok {
-		var unopened Mailbox
-		copy(unopened, box)
+		unopened := Mailbox{}
+		now := time.Now()
+		for _, msg := range box {
+			if now.Unix() <= msg.expires.Unix() {
+				unopened = append(unopened, msg)
+			}
+		}
 		delete(repo, address)
-		return box, nil
+		return unopened, nil
 	}
 	return nil, errMailboxNotFound
 }

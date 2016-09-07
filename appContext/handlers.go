@@ -2,16 +2,15 @@ package appContext
 
 import (
 	"log"
-	"io"
 	"net/http"
 	"strings"
 	"sync"
 
 	"golang.org/x/net/websocket"
 
-	"github.com/gegillam/pi-webserver/persistence"
-	"github.com/gegillam/pi-webserver/switchboard"
-	"github.com/gegillam/pi-webserver/util"
+	"github.com/alittlebrighter/switchboard/persistence"
+	"github.com/alittlebrighter/switchboard/switchboard"
+	"github.com/alittlebrighter/switchboard/util"
 )
 
 // WebsocketConn manages websocket connections coming from the Raspberry Pis and user devices
@@ -38,8 +37,9 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 				log.Println("Error parsing incoming message: " + err.Error())
 				continue
 			}
+			
 			if sCtx.DeliverEnvelope(env) {
-				sCtx.SaveMessages(env.Destination, persistence.Mailbox{env.Contents})
+				sCtx.SaveMessages(env.Destination, persistence.Mailbox{persistence.NewMessage(env)})
 			}
 		}
 	}()
@@ -49,9 +49,9 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 	go func() { 
 	// read and send messages delivered to our address
 		for msg := range connChan {
-			if _, err := ws.Write([]byte(msg)); err != nil {
+			if _, err := ws.Write([]byte(msg.Contents)); err != nil {
 				ws.Close()
-				sCtx.SaveMessages(connKey, persistence.Mailbox{msg})
+				sCtx.SaveMessages(connKey, persistence.Mailbox{persistence.NewMessage(msg)})
 			}
 		}
 		wg.Done()
@@ -61,7 +61,10 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 	newMsgs, err := sCtx.GetMessages(connKey)
 	if err == nil {
 		for _, unopened := range newMsgs {
-			connChan <- unopened
+			if _, err := ws.Write([]byte(unopened.Content)); err != nil {
+				ws.Close()
+				sCtx.SaveMessages(connKey, persistence.Mailbox{unopened})
+			}
 		}
 	} else {
 		log.Println("Error getting messages: " + err.Error())

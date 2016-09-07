@@ -6,8 +6,8 @@ import (
 
 	"golang.org/x/net/websocket"
 
-	"github.com/gegillam/pi-webserver/appContext"
-	"github.com/gegillam/pi-webserver/persistence"
+	"github.com/alittlebrighter/switchboard/appContext"
+	"github.com/alittlebrighter/switchboard/persistence"
 )
 
 func main() {
