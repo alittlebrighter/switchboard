@@ -7,6 +7,8 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strings"
+
+	"golang.org/x/net/websocket"
 )
 
 type Unmarshaller func([]byte, interface{}) error
@@ -48,9 +50,9 @@ func getUnmarshallerByMimeType(mimeType string) (unmarshaller Unmarshaller) {
 
 type Marshaller func(v interface{}) ([]byte, error)
 
-// Marshal acts as a universal Marshaller trying to give the client of an http request what it wants
+// MarshalResponse acts as a universal Marshaller trying to give the client of an http request what it wants
 // by checking the accept and content-type headers before defaulting to JSON
-func Marshal(r *http.Request, v interface{}) ([]byte, error) {
+func MarshalResponse(r *http.Request, v interface{}) ([]byte, error) {
 	var mimeType string
 	switch {
 	case r.Header.Get("Accept") != "":
@@ -64,6 +66,10 @@ func Marshal(r *http.Request, v interface{}) ([]byte, error) {
 	return getMarshallerByMimeType(mimeType)(v)
 }
 
+func MarshalToMimeType(v interface{}, mimeType string) ([]byte, error) {
+	return getMarshallerByMimeType(mimeType)(v)
+}
+
 func getMarshallerByMimeType(mimeType string) (marshaller Marshaller) {
 	switch {
 	case strings.HasSuffix(mimeType, "json"):
@@ -74,4 +80,27 @@ func getMarshallerByMimeType(mimeType string) (marshaller Marshaller) {
 		marshaller = json.Marshal
 	}
 	return
+}
+
+func ReadFromWebSocket(ws *websocket.Conn, processMsg func([]byte)) error {
+	var err error
+	chunkSize := 256
+
+	for {
+		msg := []byte{}
+		n := chunkSize
+		for n == chunkSize {
+			chunk := make([]byte, chunkSize)
+			if n, err = ws.Read(chunk); err != nil {
+				break
+			}
+			msg = append(msg, chunk[:n]...)
+		}
+		if err != nil {
+			break
+		}
+
+		processMsg(msg)
+	}
+	return err
 }

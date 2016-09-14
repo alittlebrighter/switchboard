@@ -4,20 +4,11 @@ import (
 	"errors"
 	"time"
 
-	"github.com/alittlebrighter/switchboard/switchboard"
+	"github.com/alittlebrighter/switchboard/routing"
 )
 
-type Message struct {
-	Content string
-	expires time.Time
-}
-
-func NewMessage(env *switchboard.Envelope) *Message {
-	return &Message{Content: env.Contents, expires: time.Now().Add(env.TTL * time.Second)}
-}
-
-// Mailbox stores an array of encrypted and encoded messages
-type Mailbox []*Message
+// Mailbox stores an array of messages
+type Mailbox []*routing.Envelope
 
 var errMailboxNotFound = errors.New("No mailbox found at the address specified.")
 
@@ -62,7 +53,7 @@ func (repo MapRepository) GetMessages(address string) (Mailbox, error) {
 		unopened := Mailbox{}
 		now := time.Now()
 		for _, msg := range box {
-			if now.Unix() <= msg.expires.Unix() {
+			if msg.Expires == nil || now.Unix() <= msg.Expires.Unix() {
 				unopened = append(unopened, msg)
 			}
 		}

@@ -1,6 +1,8 @@
 package appContext
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -9,9 +11,22 @@ import (
 	"golang.org/x/net/websocket"
 
 	"github.com/alittlebrighter/switchboard/persistence"
-	"github.com/alittlebrighter/switchboard/switchboard"
+	"github.com/alittlebrighter/switchboard/routing"
 	"github.com/alittlebrighter/switchboard/util"
 )
+
+const byteChunkSize = 256
+
+func (sCtx *ServerContext) processMessage(data []byte) {
+	env := new(routing.Envelope)
+	if err := util.Unmarshal(data, env); err != nil {
+		fmt.Printf("Error parsing data: %s\n", err.Error())
+	}
+
+	if sCtx.DeliverEnvelope(env) {
+		sCtx.SaveMessages(env.To, persistence.Mailbox{env})
+	}
+}
 
 // WebsocketConn manages websocket connections coming from the Raspberry Pis and user devices
 func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
@@ -22,36 +37,21 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 	connChan := sCtx.AddControllerConn(connKey)
 
 	// read messages received on the websocket and route them
-	go func() {
-		for {
-			var msg = make([]byte, 1024)
-			n, err := ws.Read(msg)
-			if err != nil {
-				ws.Close()
-				break
-			}
-
-			env := new(switchboard.Envelope)
-			err = util.Unmarshal(msg[:n], env)
-			if err != nil {
-				log.Println("Error parsing incoming message: " + err.Error())
-				continue
-			}
-			
-			if sCtx.DeliverEnvelope(env) {
-				sCtx.SaveMessages(env.Destination, persistence.Mailbox{persistence.NewMessage(env)})
-			}
-		}
-	}()
+	go util.ReadFromWebSocket(ws, sCtx.processMessage)
 
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
-	go func() { 
-	// read and send messages delivered to our address
+	go func() {
+		// read and send messages delivered to our address
 		for msg := range connChan {
-			if _, err := ws.Write([]byte(msg.Contents)); err != nil {
+			data, err := json.Marshal(msg)
+			if err != nil {
+				log.Printf("Error marshalling message: %s\n", err.Error())
+				continue
+			}
+			if _, err = ws.Write(data); err != nil {
 				ws.Close()
-				sCtx.SaveMessages(connKey, persistence.Mailbox{persistence.NewMessage(msg)})
+				sCtx.SaveMessages(connKey, persistence.Mailbox{msg})
 			}
 		}
 		wg.Done()
@@ -61,7 +61,8 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 	newMsgs, err := sCtx.GetMessages(connKey)
 	if err == nil {
 		for _, unopened := range newMsgs {
-			if _, err := ws.Write([]byte(unopened.Content)); err != nil {
+			data, err := util.MarshalToMimeType(unopened, "encoding/json")
+			if _, err = ws.Write(data); err != nil {
 				ws.Close()
 				sCtx.SaveMessages(connKey, persistence.Mailbox{unopened})
 			}
@@ -81,13 +82,13 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 func (sCtx *ServerContext) HTTPConn(w http.ResponseWriter, r *http.Request) {
 	switch strings.ToLower(r.Method) {
 	case "get":
-		storedMessages, err := sCtx.GetMessages(r.FormValue("destination"))
+		storedMessages, err := sCtx.GetMessages(r.FormValue("to"))
 		if err != nil {
 			w.Write([]byte("Error retrieving messages: " + err.Error()))
 			return
 		}
 
-		marshalled, err := util.Marshal(r, storedMessages)
+		marshalled, err := util.MarshalResponse(r, storedMessages)
 		if err != nil {
 			w.Write([]byte("Error marshalling messages: " + err.Error()))
 			return
@@ -96,7 +97,7 @@ func (sCtx *ServerContext) HTTPConn(w http.ResponseWriter, r *http.Request) {
 	case "post":
 		defer r.Body.Close()
 
-		env := new(switchboard.Envelope)
+		env := new(routing.Envelope)
 		if err := util.UnmarshalRequest(r, env); err != nil {
 			w.Write([]byte("Error parsing request body: " + err.Error()))
 		}
