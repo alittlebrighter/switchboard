@@ -2,34 +2,30 @@ package persistence
 
 import (
 	"errors"
-	"time"
 
-	"github.com/alittlebrighter/switchboard/routing"
+	"github.com/satori/go.uuid"
+
+	"github.com/alittlebrighter/switchboard/models"
 )
 
-// Mailbox stores an array of messages
-type Mailbox []*routing.Envelope
+var errUserNotFound = errors.New("No user found with that ID.")
 
-var errMailboxNotFound = errors.New("No mailbox found at the address specified.")
-
-type Backend int8
+type Backend string
 
 const (
-	MapBackend = iota
+	MapBackend  = "map"
+	BoltBackend = "bolt"
 )
 
-// MessageRepository defines the methods required to store and retrieve messages routed through the server
-type MessageRepository interface {
-	SaveMessages(string, Mailbox) error
-	GetMessages(string) (Mailbox, error)
+// UserRepository defines the methods required to store and retrieve messages routed through the server
+type UserRepository interface {
+	SaveUser(*models.User) error
+	GetUser(*uuid.UUID) (*models.User, error)
 }
 
-// MapRepository is a simple implementation of a Message Repository
-type MapRepository map[string]Mailbox
-
 // NewMessageRepository returns a new MessageRepository with the specified backend.
-func NewMessageRepository(backend Backend) MessageRepository {
-	var repo MessageRepository
+func NewUserRepository(backend Backend) UserRepository {
+	var repo UserRepository
 	switch backend {
 	case MapBackend:
 		repo = make(MapRepository)
@@ -37,28 +33,19 @@ func NewMessageRepository(backend Backend) MessageRepository {
 	return repo
 }
 
-// SaveMessages saves an array of messages in the target address' mailbox
-func (repo MapRepository) SaveMessages(address string, msgs Mailbox) error {
-	if mailbox, ok := repo[address]; ok {
-		mailbox = append(mailbox, msgs...)
-	} else {
-		repo[address] = msgs
-	}
+// MapRepository is a simple implementation of a Message Repository
+type MapRepository map[uuid.UUID]*models.User
+
+// SaveUser saves an array of messages in the target address' models.Mailbox
+func (repo MapRepository) SaveUser(user *models.User) error {
+	repo[user.ID] = user
 	return nil
 }
 
-// GetMessages retrieves all of the messages stored in a mailbox at an address and removes the associated address' mailbox
-func (repo MapRepository) GetMessages(address string) (Mailbox, error) {
-	if box, ok := repo[address]; ok {
-		unopened := Mailbox{}
-		now := time.Now()
-		for _, msg := range box {
-			if msg.Expires == nil || now.Unix() <= msg.Expires.Unix() {
-				unopened = append(unopened, msg)
-			}
-		}
-		delete(repo, address)
-		return unopened, nil
+// GetUser retrieves all of the messages stored in a models.Mailbox at an address and removes the associated address' models.Mailbox
+func (repo MapRepository) GetUser(id *uuid.UUID) (*models.User, error) {
+	if user, ok := repo[*id]; ok {
+		return user, nil
 	}
-	return nil, errMailboxNotFound
+	return nil, errUserNotFound
 }

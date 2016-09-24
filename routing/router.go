@@ -1,20 +1,14 @@
 package routing
 
 import (
-	"time"
+	"github.com/alittlebrighter/switchboard/models"
+	uuid "github.com/satori/go.uuid"
 )
 
 const channelBufferSize = 5
 
-// Envelope wraps the encrypted contents of a message with minimal metadata to help the relay server know
-// what to do with the message
-type Envelope struct {
-	To, From, Contents, Signature string
-	Expires                       *time.Time
-}
-
 // Switchboard manages connections and routing messages between connections
-type Switchboard map[string]chan *Envelope
+type Switchboard map[*uuid.UUID]chan *models.Envelope
 
 // NewSwitchboard returns a new pointer to a switchboard instance
 func NewSwitchboard() Switchboard {
@@ -22,14 +16,14 @@ func NewSwitchboard() Switchboard {
 }
 
 // AddControllerConn adds or overwrites the channel linked to a controller websocket connection
-func (s Switchboard) AddControllerConn(connID string) chan *Envelope {
-	connChan := make(chan *Envelope, channelBufferSize)
+func (s Switchboard) AddControllerConn(connID *uuid.UUID) chan *models.Envelope {
+	connChan := make(chan *models.Envelope, channelBufferSize)
 	s[connID] = connChan
 	return connChan
 }
 
 // FetchControllerConn retrieves the channel linked to a controller websocket connection
-func (s Switchboard) FetchControllerConn(connID string) chan *Envelope {
+func (s Switchboard) FetchControllerConn(connID *uuid.UUID) chan *models.Envelope {
 	if conn, ok := s[connID]; ok {
 		return conn
 	}
@@ -37,22 +31,18 @@ func (s Switchboard) FetchControllerConn(connID string) chan *Envelope {
 }
 
 // CloseControllerConn closes and deletes the channel linked to a controller websocket connection
-func (s Switchboard) CloseControllerConn(connID string) {
+func (s Switchboard) CloseControllerConn(connID *uuid.UUID) {
 	close(s[connID])
 	delete(s, connID)
 }
 
 // DeliverEnvelope attempts to deliver the contents of an Envelope if the destination is connected
-// otherwise it returns true to indicate to the caller that the contents should be persisted
-func (s Switchboard) DeliverEnvelope(envelope *Envelope) bool {
+// it returns a flag denoting whether the envelope was delivered immediately (true) or stored for later pickup (false)
+func (s Switchboard) DeliverEnvelope(envelope *models.Envelope) bool {
 	conn := s.FetchControllerConn(envelope.To)
-	switch {
-	case conn == nil && envelope.Expires.Unix() > time.Now().Unix():
-		return true
-	case conn == nil && envelope.Expires == nil:
-		return false
-	default:
-		conn <- envelope
+	if conn == nil {
 		return false
 	}
+	conn <- envelope
+	return true
 }

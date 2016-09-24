@@ -8,23 +8,27 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/satori/go.uuid"
 	"golang.org/x/net/websocket"
 
-	"github.com/alittlebrighter/switchboard/persistence"
-	"github.com/alittlebrighter/switchboard/routing"
+	"github.com/alittlebrighter/switchboard/models"
 	"github.com/alittlebrighter/switchboard/util"
 )
 
 const byteChunkSize = 256
 
 func (sCtx *ServerContext) processMessage(data []byte) {
-	env := new(routing.Envelope)
+	env := new(models.Envelope)
 	if err := util.Unmarshal(data, env); err != nil {
 		fmt.Printf("Error parsing data: %s\n", err.Error())
 	}
 
-	if sCtx.DeliverEnvelope(env) {
-		sCtx.SaveMessages(env.To, persistence.Mailbox{env})
+	if !sCtx.DeliverEnvelope(env) {
+		user, err := sCtx.GetUser(env.To)
+		if err == nil {
+			user.SaveMessage(env)
+			sCtx.SaveUser(user)
+		}
 	}
 }
 
@@ -33,13 +37,28 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 	connKey := ws.Config().Origin.Host
 	log.Printf("Connection started from: %s", connKey)
 
-	// register our connection
-	connChan := sCtx.AddControllerConn(connKey)
+	id, err := uuid.FromString(connKey)
+	if err != nil {
+		ws.Close()
+		return
+	}
+	user, err := sCtx.GetUser(&id)
+	if err != nil {
+		user = models.NewUser(&id)
+		sCtx.SaveUser(user)
+	}
 
-	// read messages received on the websocket and route them
-	go util.ReadFromWebSocket(ws, sCtx.processMessage)
+	// register our connection
+	connChan := sCtx.AddControllerConn(&id)
 
 	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	// read messages received on the websocket and route them
+	go func() {
+		util.ReadFromWebSocket(ws, sCtx.processMessage)
+		wg.Done()
+	}()
+
 	wg.Add(1)
 	go func() {
 		// read and send messages delivered to our address
@@ -51,29 +70,25 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 			}
 			if _, err = ws.Write(data); err != nil {
 				ws.Close()
-				sCtx.SaveMessages(connKey, persistence.Mailbox{msg})
+				user.SaveMessage(msg)
+				sCtx.SaveUser(user)
 			}
 		}
 		wg.Done()
 	}()
 
 	// fetch persisted messages and send them now that there is a connection
-	newMsgs, err := sCtx.GetMessages(connKey)
-	if err == nil {
-		for _, unopened := range newMsgs {
-			data, err := util.MarshalToMimeType(unopened, "encoding/json")
-			if _, err = ws.Write(data); err != nil {
-				ws.Close()
-				sCtx.SaveMessages(connKey, persistence.Mailbox{unopened})
-			}
+	for _, unopened := range user.FlushMessages() {
+		data, err := json.Marshal(unopened)
+		if _, err = ws.Write(data); err != nil {
+			ws.Close()
+			user.SaveMessage(unopened)
 		}
-	} else {
-		log.Println("Error getting messages: " + err.Error())
 	}
 
 	wg.Wait()
 
-	sCtx.CloseControllerConn(connKey)
+	sCtx.CloseControllerConn(&id)
 
 	log.Printf("Closing connection to: %s", connKey)
 }
@@ -82,11 +97,18 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 func (sCtx *ServerContext) HTTPConn(w http.ResponseWriter, r *http.Request) {
 	switch strings.ToLower(r.Method) {
 	case "get":
-		storedMessages, err := sCtx.GetMessages(r.FormValue("to"))
+		id, err := uuid.FromString(r.FormValue("to"))
+		if err != nil {
+			w.Write([]byte("Error parsing ID: " + err.Error()))
+			return
+		}
+		user, err := sCtx.GetUser(&id)
 		if err != nil {
 			w.Write([]byte("Error retrieving messages: " + err.Error()))
 			return
 		}
+		storedMessages := user.FlushMessages()
+		sCtx.SaveUser(user)
 
 		marshalled, err := util.MarshalResponse(r, storedMessages)
 		if err != nil {
@@ -97,15 +119,17 @@ func (sCtx *ServerContext) HTTPConn(w http.ResponseWriter, r *http.Request) {
 	case "post":
 		defer r.Body.Close()
 
-		env := new(routing.Envelope)
+		env := new(models.Envelope)
 		if err := util.UnmarshalRequest(r, env); err != nil {
 			w.Write([]byte("Error parsing request body: " + err.Error()))
 		}
 
-		if sCtx.DeliverEnvelope(env) {
-			w.Write([]byte("Message queued."))
-		} else {
-			w.Write([]byte("Message received."))
+		if !sCtx.DeliverEnvelope(env) {
+			user, err := sCtx.GetUser(env.To)
+			if err == nil {
+				user.SaveMessage(env)
+				sCtx.SaveUser(user)
+			}
 		}
 	}
 	return
