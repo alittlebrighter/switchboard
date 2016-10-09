@@ -2,12 +2,11 @@ package appContext
 
 import (
 	"encoding/json"
-	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
 
+	logger "github.com/Sirupsen/logrus"
 	"github.com/satori/go.uuid"
 	"golang.org/x/net/websocket"
 
@@ -18,9 +17,11 @@ import (
 const byteChunkSize = 256
 
 func (sCtx *ServerContext) processMessage(data []byte) {
+	log := logger.WithField("func", "processMessage")
+
 	env := new(models.Envelope)
 	if err := util.Unmarshal(data, env); err != nil {
-		fmt.Printf("Error parsing data: %s\n", err.Error())
+		log.WithError(err).Errorln("Could not parse envelope data.")
 	}
 
 	if !sCtx.DeliverEnvelope(env) {
@@ -28,14 +29,18 @@ func (sCtx *ServerContext) processMessage(data []byte) {
 		if err == nil {
 			user.SaveMessage(env)
 			sCtx.SaveUser(user)
+		} else {
+			log.WithError(err).Warnln("Could not find user mailbox .")
 		}
 	}
 }
 
 // WebsocketConn manages websocket connections coming from the Raspberry Pis and user devices
 func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
+	log := logger.WithField("func", "WebsocketConn")
+
 	connKey := ws.Config().Origin.Host
-	log.Printf("Connection started from: %s", connKey)
+	log.WithField("connKey", connKey).Debugln("Websocket connection started.")
 
 	id, err := uuid.FromString(connKey)
 	if err != nil {
@@ -65,10 +70,11 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 		for msg := range connChan {
 			data, err := json.Marshal(msg)
 			if err != nil {
-				log.Printf("Error marshalling message: %s\n", err.Error())
+				log.WithError(err).Errorln("Could not marshal message.")
 				continue
 			}
 			if _, err = ws.Write(data); err != nil {
+				log.Debugln("Websocket closed.  Saving message.")
 				ws.Close()
 				user.SaveMessage(msg)
 				sCtx.SaveUser(user)
@@ -81,6 +87,7 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 	for _, unopened := range user.FlushMessages() {
 		data, err := json.Marshal(unopened)
 		if _, err = ws.Write(data); err != nil {
+			log.Debugln("Websocket closed.  Saving message.")
 			ws.Close()
 			user.SaveMessage(unopened)
 		}
@@ -90,11 +97,14 @@ func (sCtx *ServerContext) WebsocketConn(ws *websocket.Conn) {
 
 	sCtx.CloseControllerConn(&id)
 
-	log.Printf("Closing connection to: %s", connKey)
+	log.WithField("connKey", connKey).Debugln("Closing connection.")
 }
 
 // HTTPConn receives requests via http and routes them to the correct Raspberry Pi websocket connection
 func (sCtx *ServerContext) HTTPConn(w http.ResponseWriter, r *http.Request) {
+	log := logger.WithField("func", "HTTPConn")
+
+	log.WithField("httpMethod", r.Method).Debugln("HTTP request received.")
 	switch strings.ToLower(r.Method) {
 	case "get":
 		id, err := uuid.FromString(r.FormValue("to"))
@@ -104,6 +114,7 @@ func (sCtx *ServerContext) HTTPConn(w http.ResponseWriter, r *http.Request) {
 		}
 		user, err := sCtx.GetUser(&id)
 		if err != nil {
+			log.WithField("to", r.FormValue("to")).WithError(err).Errorln("Could not retrieve messages.")
 			w.Write([]byte("Error retrieving messages: " + err.Error()))
 			return
 		}
@@ -112,6 +123,7 @@ func (sCtx *ServerContext) HTTPConn(w http.ResponseWriter, r *http.Request) {
 
 		marshalled, err := util.MarshalResponse(r, storedMessages)
 		if err != nil {
+			log.WithError(err).Errorln("Could not marshal messages for user.")
 			w.Write([]byte("Error marshalling messages: " + err.Error()))
 			return
 		}
@@ -121,12 +133,14 @@ func (sCtx *ServerContext) HTTPConn(w http.ResponseWriter, r *http.Request) {
 
 		env := new(models.Envelope)
 		if err := util.UnmarshalRequest(r, env); err != nil {
+			log.WithError(err).Errorln("Could not unmarshal envelope.")
 			w.Write([]byte("Error parsing request body: " + err.Error()))
 		}
 
 		if !sCtx.DeliverEnvelope(env) {
 			user, err := sCtx.GetUser(env.To)
 			if err == nil {
+				log.WithError(err).Infoln("Could not deliver envelope immediately.")
 				user.SaveMessage(env)
 				sCtx.SaveUser(user)
 			}
